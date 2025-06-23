@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { stylizeImage } from "../api";
+import { stylizeImage } from "..";
 
 const UploadForm = ({ setResultImage }) => {
   const [face, setFace] = useState(null);

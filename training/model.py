@@ -19,24 +19,14 @@ class ContentEncoder(nn.Module):
         return self.encoder(x)
 
 
-# --------- Style Encoder ---------
-class StyleEncoder(nn.Module):
-    def __init__(self):
-        super(StyleEncoder, self).__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv2d(3, 64, 7, stride=1, padding=3),
-            nn.ReLU(),
-            nn.Conv2d(64, 128, 4, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 256, 4, stride=2, padding=1),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(256, 128)
-        )
+# --------- Style Embedding ---------
+class StyleEmbedding(nn.Module):
+    def __init__(self, num_styles, embed_dim=128):
+        super(StyleEmbedding, self).__init__()
+        self.embedding = nn.Embedding(num_styles, embed_dim)
 
-    def forward(self, x):
-        return self.encoder(x)
+    def forward(self, style_ids):
+        return self.embedding(style_ids)
 
 
 # --------- AdaIN (Adaptive Instance Normalization) ---------
@@ -74,17 +64,23 @@ class Decoder(nn.Module):
 
 # --------- Stylizer Network ---------
 class StylizerNet(nn.Module):
-    def __init__(self):
+    def __init__(self, num_styles):
         super(StylizerNet, self).__init__()
         self.content_encoder = ContentEncoder()
-        self.style_encoder = StyleEncoder()
+        self.style_embedding = StyleEmbedding(num_styles=num_styles)
+        self.mlp = nn.Sequential(
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256)
+        )
         self.adain = AdaIN()
         self.decoder = Decoder()
 
-    def forward(self, face_img, style_img):
-        content_feat = self.content_encoder(face_img)
-        style_feat = self.style_encoder(style_img)
-        style_feat_expanded = style_feat.unsqueeze(-1).unsqueeze(-1).expand_as(content_feat)
-        fused = self.adain(content_feat, style_feat_expanded)
+    def forward(self, face_img, style_id):
+        content_feat = self.content_encoder(face_img)  # (B, 256, H, W)
+        style_vec = self.style_embedding(style_id)      # (B, 128)
+        style_feat = self.mlp(style_vec)                # (B, 256)
+        style_feat_exp = style_feat.unsqueeze(-1).unsqueeze(-1).expand_as(content_feat)
+        fused = self.adain(content_feat, style_feat_exp)
         out = self.decoder(fused)
         return out

@@ -1,76 +1,81 @@
+import os
+import json
+import yaml
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-import torchvision.transforms as transforms
-from torchvision.datasets import ImageFolder
-import os
+from torchvision import transforms
+from dataset import FaceStyleDataset
 from model import StylizerNet
-from losses import VGGFeatures, perceptual_loss, style_loss, IdentityLoss
+from losses import PerceptualLoss, StyleLoss, IdentityLoss
+from tqdm import tqdm
 
-# --------- Configs ---------
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-face_dir = "../data/faces"
-style_dir = "../data/styles"
-batch_size = 8
-epochs = 20
-lr = 1e-4
+# ---------- Load Config ----------
+with open("training/config.yaml", 'r') as f:
+    config = yaml.safe_load(f)
 
-# --------- Transforms ---------
+# ---------- Style ID Mapping ----------
+with open(config["style_classes_path"], 'r') as f:
+    style_to_id = json.load(f)
+num_styles = len(style_to_id)
+
+# ---------- Transforms ----------
 transform = transforms.Compose([
-    transforms.Resize((256, 256)),
-    transforms.ToTensor(),
+    transforms.Resize((config["image_size"], config["image_size"])),
+    transforms.ToTensor()
 ])
 
-# --------- Dataset ---------
-class StylizationDataset(torch.utils.data.Dataset):
-    def __init__(self, face_folder, style_folder, transform):
-        self.face_paths = [os.path.join(face_folder, x) for x in os.listdir(face_folder)]
-        self.style_paths = [os.path.join(style_folder, x) for x in os.listdir(style_folder)]
-        self.transform = transform
+# ---------- Dataset & Loader ----------
+dataset = FaceStyleDataset(
+    content_root=config["content_dir"],
+    style_root=config["style_dir"],
+    style_map_path=config["style_classes_path"],
+    transform=transform
+)
+loader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=True, num_workers=config["num_workers"])
 
-    def __len__(self):
-        return len(self.face_paths)
+# ---------- Model ----------
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = StylizerNet(num_styles=num_styles).to(device)
 
-    def __getitem__(self, idx):
-        face_img = self.transform(Image.open(self.face_paths[idx]).convert("RGB"))
-        style_img = self.transform(Image.open(random.choice(self.style_paths)).convert("RGB"))
-        return face_img, style_img
+# ---------- Losses ----------
+vgg_loss = PerceptualLoss(weight=1.0).to(device)
+style_loss = StyleLoss(weight=10.0).to(device)
+identity_loss = IdentityLoss(arcface_model=lambda x: torch.nn.functional.normalize(x.mean(dim=[2, 3]), dim=1), weight=5.0).to(device)  # dummy encoder
 
-# --------- Initialize ---------
-from PIL import Image
-import random
+# ---------- Optimizer ----------
+optimizer = optim.Adam(model.parameters(), lr=config["lr"])
 
-model = StylizerNet().to(device)
-vgg = VGGFeatures().to(device)
-id_loss_fn = IdentityLoss(device=device)
-optimizer = optim.Adam(model.parameters(), lr=lr)
-
-train_dataset = StylizationDataset(face_dir, style_dir, transform)
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-
-# --------- Training Loop ---------
-for epoch in range(epochs):
+# ---------- Training Loop ----------
+print("\n[INFO] Starting training...")
+for epoch in range(config["num_epochs"]):
     model.train()
-    total_loss = 0
-    for face_img, style_img in train_loader:
-        face_img = face_img.to(device)
+    running_loss = 0.0
+
+    for content_img, style_img, style_id in tqdm(loader):
+        content_img = content_img.to(device)
         style_img = style_img.to(device)
+        style_id = style_id.to(device)
+
+        output = model(content_img, style_id)
+
+        loss_c = vgg_loss(output, content_img)
+        loss_s = style_loss(output, style_img)
+        loss_i = identity_loss(output, content_img)
+
+        total_loss = loss_c + loss_s + loss_i
 
         optimizer.zero_grad()
-        stylized = model(face_img, style_img)
-
-        loss_c = perceptual_loss(vgg, stylized, face_img)
-        loss_s = style_loss(vgg, stylized, style_img)
-        loss_i = id_loss_fn(stylized, face_img)
-        
-        loss = loss_c + loss_s + loss_i
-        loss.backward()
+        total_loss.backward()
         optimizer.step()
 
-        total_loss += loss.item()
+        running_loss += total_loss.item()
 
-    print(f"Epoch {epoch+1}/{epochs} | Loss: {total_loss/len(train_loader):.4f}")
+    print(f"Epoch {epoch+1}/{config['num_epochs']} | Loss: {running_loss / len(loader):.4f}")
 
-# --------- Save Model ---------
-torch.save(model.state_dict(), "../training/checkpoints/stylizer_net.pth")
+    # Save checkpoint
+    os.makedirs(os.path.dirname(config["checkpoint_path"]), exist_ok=True)
+    torch.save(model.state_dict(), config["checkpoint_path"])
+
+print("\n[INFO] Training complete.")
