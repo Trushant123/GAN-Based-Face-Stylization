@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.pip-wheel-metadata/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# PyTorch
+*.pt
+*.pth
+
+# VSCode or IDE
+.vscode/
+.idea/
