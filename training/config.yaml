@@ -1,0 +1,18 @@
+train:
+  batch_size: 8
+  epochs: 20
+  lr: 0.0001
+  checkpoint_path: "training/checkpoints/stylizer_net.pth"
+  save_every: 5
+
+model:
+  input_size: [256, 256]
+
+loss_weights:
+  perceptual: 1.0
+  style: 1.0
+  identity: 1.0
+
+data:
+  face_dir: "data/faces"
+  style_dir: "data/styles"
